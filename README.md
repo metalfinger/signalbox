@@ -5,6 +5,8 @@ tmux session and window sits in a sidebar with a light for the Claude session in
 see at a glance what's working and what's waiting on you, and open any of them in a real
 terminal.
 
+![Signalbox: tmux sessions in the sidebar with a light for each Claude session, a Claude Code session in a tab, and the images it made on the right](docs/screenshot.png)
+
 Signalbox shows and hosts; Claude does the work. It doesn't start, fork or drive agents itself.
 
 ## What it does
