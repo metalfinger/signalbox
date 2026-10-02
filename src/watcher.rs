@@ -74,7 +74,7 @@ pub struct Machine {
 impl Machine {
     fn read() -> Result<Self, String> {
         let tmux = tmux::sessions()?;
-        let claude = live::scan()
+        let mut claude = live::scan()
             .into_iter()
             .filter_map(|session| Some((session.pane.clone()?, session)))
             .collect();
@@ -90,6 +90,7 @@ impl Machine {
                 None => sessions.push(session),
             }
         }
+        settle_busy(&sessions, &mut claude);
         Ok(Self {
             sessions,
             views,
@@ -170,6 +171,23 @@ impl Machine {
             }
         }
         shown
+    }
+}
+
+/// Claude Code can leave its session file at "busy" long after a turn ended (for days, at
+/// worst). A working Claude Code redraws its spinner every moment, so in a window with no recent
+/// output it isn't working, whatever the file says.
+fn settle_busy(sessions: &[TmuxSession], claude: &mut HashMap<String, LiveSession>) {
+    let quiet = sessions
+        .iter()
+        .flat_map(|session| &session.windows)
+        .filter(|window| !window.recent_output);
+    for pane in quiet.flat_map(|window| &window.panes) {
+        if let Some(session) = claude.get_mut(&pane.id)
+            && session.state == ClaudeState::Working
+        {
+            session.state = ClaudeState::Idle;
+        }
     }
 }
 
@@ -603,6 +621,35 @@ impl Watcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn busy_in_a_quiet_window_isnt_working() {
+        let window = |id: &str, pane: &str, recent_output: bool| TmuxWindow {
+            id: id.into(),
+            index: "1".into(),
+            name: id.into(),
+            active: true,
+            layout: String::new(),
+            recent_output,
+            panes: vec![crate::tmux::TmuxPane {
+                id: pane.into(),
+                index: "1".into(),
+                cwd: "/code".into(),
+            }],
+        };
+        let sessions = vec![TmuxSession {
+            name: "web".into(),
+            windows: vec![window("@1", "%1", true), window("@2", "%2", false)],
+        }];
+        let busy = |pid: u32, pane: &str| {
+            let file = serde_json::json!({"pid": pid, "entrypoint": "cli", "status": "busy", "tmux": format!("web:@1.{pane}")});
+            (pane.to_string(), live::parse(&file).unwrap())
+        };
+        let mut claude = HashMap::from([busy(1, "%1"), busy(2, "%2")]);
+        settle_busy(&sessions, &mut claude);
+        assert_eq!(claude["%1"].state, ClaudeState::Working, "its spinner is drawing");
+        assert_eq!(claude["%2"].state, ClaudeState::Idle, "nothing on screen has moved");
+    }
 
     fn one(state: ClaudeState) -> HashMap<String, Seen> {
         let seen = Seen {

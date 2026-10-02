@@ -20,8 +20,14 @@ pub struct TmuxWindow {
     pub active: bool,
     /// tmux's layout string; `select-layout` replays it exactly.
     pub layout: String,
+    /// Printed something in the last few seconds. A working Claude Code redraws its spinner
+    /// every moment, so a window without this isn't working, whatever Claude's files say.
+    pub recent_output: bool,
     pub panes: Vec<TmuxPane>,
 }
+
+/// How long a window can go without output and still be counted as busy.
+const RECENT_OUTPUT: u64 = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TmuxSession {
@@ -30,7 +36,7 @@ pub struct TmuxSession {
 }
 
 const PANE_FORMAT: &str = "#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{window_active}\t\
-                           #{window_layout}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}";
+                           #{window_layout}\t#{window_activity}\t#{pane_id}\t#{pane_index}\t#{pane_current_path}";
 
 /// Every query asks for UTF-8 (`-u`). Otherwise tmux answers a client without a UTF-8 locale
 /// (an app opened from Finder or Spotlight has none) with each tab and non-ASCII character
@@ -49,7 +55,11 @@ pub fn sessions() -> Result<Vec<TmuxSession>, String> {
         .output()
         .map_err(|error| format!("Couldn't run tmux: {error}"))?;
     if output.status.success() {
-        return read_panes(&String::from_utf8_lossy(&output.stdout));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_secs())
+            .unwrap_or_default();
+        return read_panes(&String::from_utf8_lossy(&output.stdout), now);
     }
     let error = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if no_server(&error) {
@@ -64,8 +74,8 @@ pub fn sessions() -> Result<Vec<TmuxSession>, String> {
 
 /// tmux's list of panes, read. An answer with lines but none readable is an error: shown as
 /// no sessions, it would hide every running one.
-fn read_panes(text: &str) -> Result<Vec<TmuxSession>, String> {
-    let sessions = parse_panes(text);
+fn read_panes(text: &str, now: u64) -> Result<Vec<TmuxSession>, String> {
+    let sessions = parse_panes(text, now);
     if sessions.is_empty() && text.lines().any(|line| !line.trim().is_empty()) {
         return Err("tmux answered in a form Signalbox can't read.".to_string());
     }
@@ -78,12 +88,13 @@ fn no_server(error: &str) -> bool {
         || (error.starts_with("error connecting to") && error.ends_with("(No such file or directory)"))
 }
 
-/// One line per pane, in tmux's order, grouped into sessions and windows.
-pub fn parse_panes(text: &str) -> Vec<TmuxSession> {
+/// One line per pane, in tmux's order, grouped into sessions and windows; `now` in seconds since
+/// 1970, as tmux gives its times.
+pub fn parse_panes(text: &str, now: u64) -> Vec<TmuxSession> {
     let mut sessions: Vec<TmuxSession> = Vec::new();
     for line in text.lines() {
         let fields: Vec<&str> = line.split('\t').collect();
-        let [session, id, index, name, active, layout, pane, pane_index, cwd] = fields[..] else {
+        let [session, id, index, name, active, layout, activity, pane, pane_index, cwd] = fields[..] else {
             continue;
         };
         if sessions.last().is_none_or(|last| last.name != session) {
@@ -100,6 +111,9 @@ pub fn parse_panes(text: &str) -> Vec<TmuxSession> {
                 name: name.to_string(),
                 active: active == "1",
                 layout: layout.to_string(),
+                recent_output: activity
+                    .parse::<u64>()
+                    .is_ok_and(|activity| now.saturating_sub(activity) <= RECENT_OUTPUT),
                 panes: Vec::new(),
             });
         }
@@ -225,18 +239,18 @@ mod tests {
     #[test]
     fn an_answer_that_cant_be_read_is_an_error_not_an_empty_list() {
         // What tmux sends a client without a UTF-8 locale: every tab replaced by `_`.
-        let mangled = "web_@35_1_docs site_0_ab12,200x50,0,0_%53_1_/code/a\n";
-        assert!(read_panes(mangled).is_err());
-        assert!(read_panes("").is_ok_and(|sessions| sessions.is_empty()));
+        let mangled = "web_@35_1_docs site_0_ab12,200x50,0,0_1000_%53_1_/code/a\n";
+        assert!(read_panes(mangled, 1000).is_err());
+        assert!(read_panes("", 1000).is_ok_and(|sessions| sessions.is_empty()));
     }
 
     #[test]
     fn groups_panes_by_window_and_session() {
-        let text = "web\t@35\t1\tdocs site\t0\tab12,200x50,0,0\t%53\t1\t/code/a\n\
-                    web\t@35\t1\tdocs site\t0\tab12,200x50,0,0\t%99\t2\t/code/b\n\
-                    web\t@75\t2\tplanner\t1\tcd34,200x50,0,0,7\t%103\t1\t/code/c\n\
-                    api\t@4\t1\tzsh\t1\tef56,80x24,0,0,1\t%7\t1\t/x\nbad line\n";
-        let sessions = parse_panes(text);
+        let text = "web\t@35\t1\tdocs site\t0\tab12,200x50,0,0\t998\t%53\t1\t/code/a\n\
+                    web\t@35\t1\tdocs site\t0\tab12,200x50,0,0\t998\t%99\t2\t/code/b\n\
+                    web\t@75\t2\tplanner\t1\tcd34,200x50,0,0,7\t400\t%103\t1\t/code/c\n\
+                    api\t@4\t1\tzsh\t1\tef56,80x24,0,0,1\t990\t%7\t1\t/x\nbad line\n";
+        let sessions = parse_panes(text, 1000);
         assert_eq!(sessions.len(), 2);
         assert_eq!(sessions[0].name, "web");
         assert_eq!(sessions[0].windows.len(), 2);
@@ -247,6 +261,10 @@ mod tests {
         assert_eq!(sessions[0].windows[1].id, "@75");
         assert!(sessions[0].windows[1].active);
         assert_eq!(sessions[1].windows[0].name, "zsh");
+        // Output 2 and 10 seconds ago is recent; 600 seconds ago isn't.
+        assert!(sessions[0].windows[0].recent_output);
+        assert!(!sessions[0].windows[1].recent_output);
+        assert!(sessions[1].windows[0].recent_output);
     }
 
     #[test]

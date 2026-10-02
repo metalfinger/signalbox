@@ -497,6 +497,7 @@ mod tests {
             name: id.into(),
             active,
             layout: String::new(),
+            recent_output: false,
             panes: vec![],
         };
         let sessions = vec![TmuxSession {
