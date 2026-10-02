@@ -1,0 +1,5 @@
+# Every program the app starts goes through `sys::command`, which starts it with no signals
+# blocked (a child inherits the mask of the thread that starts it).
+disallowed-methods = [
+    { path = "std::process::Command::new", reason = "use sys::command, which starts the program with no signals blocked" },
+]

@@ -1,0 +1,10 @@
+target/
+.DS_Store
+*.log
+.mcp.json
+
+# Working notes, kept on this machine only.
+PLAN.md
+LAB.md
+/reference/
+.claude/

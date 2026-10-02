@@ -1,0 +1,40 @@
+#!/bin/bash
+# Opens Signalbox, installing a newer build from the repo first.
+#   signalbox                 the window as you left it
+#   signalbox --tmux NAME     a tmux session in a new window
+#   signalbox --go-to         straight into Cmd-K, for a global hotkey
+# Installed by macos/install.sh, which writes the repo's path in below.
+REPO="__REPO__"
+BUILD="$REPO/target/release/signalbox"
+APP="$HOME/Applications/Signalbox.app/Contents/MacOS/Signalbox"
+if [ ! -x "$APP" ]; then
+    echo "Signalbox isn't installed yet. Run: $REPO/macos/install.sh"
+    exit 1
+fi
+# A newer build than the installed app: install it first.
+if [ -x "$BUILD" ] && [ "$BUILD" -nt "$APP" ]; then
+    "$REPO/macos/update.sh"
+fi
+
+args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --tmux)
+            [ -n "$2" ] || { echo "Which tmux session?"; exit 1; }
+            args+=("--tmux" "$2")
+            shift 2
+            ;;
+        --go-to | --start)
+            args+=("$1")
+            shift
+            ;;
+        *)
+            echo "Usage: signalbox [--tmux SESSION] [--start] [--go-to]"
+            exit 1
+            ;;
+    esac
+done
+
+mkdir -p "$HOME/.signalbox"
+SIGNALBOX_DEBUG=1 nohup "$APP" "${args[@]}" > "$HOME/.signalbox/last-run.log" 2>&1 &
+echo "Signalbox opened."

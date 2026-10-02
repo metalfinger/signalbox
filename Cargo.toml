@@ -1,0 +1,35 @@
+[package]
+name = "signalbox"
+version = "0.1.0"
+edition = "2024"
+description = "A native macOS home for your tmux sessions and the Claude Code sessions in them"
+license = "MIT"
+repository = "https://github.com/metalfinger/signalbox"
+readme = "README.md"
+publish = false
+# GPUI Kit's GPUI uses `std::hint::cold_path`.
+rust-version = "1.98"
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.7" }
+gpui-kit = "0.7.0"
+anyhow = "1"
+async-channel = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+alacritty_terminal = { version = "0.26.0", default-features = false }
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.7", features = ["test-support"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2.7"
+block = "0.1.6"
+libc = "0.2"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# objc 0.2's macros test a `cargo-clippy` feature.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
